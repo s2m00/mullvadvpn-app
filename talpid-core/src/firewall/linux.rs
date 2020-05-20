@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 use libc;
 use nftnl::{
     self,
-    expr::{self, Payload, Verdict},
+    expr::{self, IcmpCode, Payload, RejectionType, Verdict},
     nft_expr, table, Batch, Chain, FinalizedBatch, ProtoFamily, Rule, Table,
 };
 use std::{
@@ -383,6 +383,25 @@ impl<'a> PolicyBatch<'a> {
         if allow_lan {
             self.add_allow_lan_rules();
         }
+
+        // Reject any remaining outgoing traffic
+        // TCP/IP: Send a TCP reset packet.
+        // Other protocols: Send an ICMP reject message.
+        let mut reject_tcp_rule = Rule::new(&self.out_chain);
+        check_l4proto(&mut reject_tcp_rule, TransportProtocol::Tcp);
+        add_verdict(
+            &mut reject_tcp_rule,
+            &Verdict::Reject(RejectionType::TcpRst),
+        );
+        self.batch.add(&reject_tcp_rule, nftnl::MsgType::Add);
+
+        let mut reject_rule = Rule::new(&self.out_chain);
+        add_verdict(
+            &mut reject_rule,
+            &Verdict::Reject(RejectionType::Icmp(IcmpCode::HostUnreach)),
+        );
+        self.batch.add(&reject_rule, nftnl::MsgType::Add);
+
         Ok(())
     }
 
@@ -470,12 +489,15 @@ impl<'a> PolicyBatch<'a> {
     fn add_drop_dns_rule(&mut self) {
         let mut block_udp_rule = Rule::new(&self.out_chain);
         check_port(&mut block_udp_rule, TransportProtocol::Udp, End::Dst, 53);
-        add_verdict(&mut block_udp_rule, &Verdict::Drop);
+        add_verdict(
+            &mut block_udp_rule,
+            &Verdict::Reject(RejectionType::Icmp(IcmpCode::HostUnreach)),
+        );
         self.batch.add(&block_udp_rule, nftnl::MsgType::Add);
 
         let mut block_tcp_rule = Rule::new(&self.out_chain);
         check_port(&mut block_tcp_rule, TransportProtocol::Tcp, End::Dst, 53);
-        add_verdict(&mut block_tcp_rule, &Verdict::Drop);
+        add_verdict(&mut block_tcp_rule, &Verdict::Reject(RejectionType::TcpRst));
         self.batch.add(&block_tcp_rule, nftnl::MsgType::Add);
     }
 
