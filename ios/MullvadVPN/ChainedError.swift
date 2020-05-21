@@ -20,10 +20,11 @@ extension ChainedError {
         let reflection = Mirror(reflecting: self)
 
         if case .enum = reflection.displayStyle {
-            let enumCase = reflection.children.first
-            let associatedError = enumCase?.value as? Error
-
-            return associatedError
+            for child in reflection.children {
+                if let associatedError = child.value as? Error {
+                    return associatedError
+                }
+            }
         }
 
         return nil
